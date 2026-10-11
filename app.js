@@ -2,6 +2,10 @@ if(process.env.NODE_ENV != "production") {
     require('dotenv').config();
 }
 
+const dns = require("dns");
+
+dns.setServers(["8.8.8.8", "1.1.1.1"]);
+
 const express = require("express");
 const app = express();
 const mongoose = require("mongoose");
@@ -13,19 +17,23 @@ const session = require("express-session");
 const flash = require("connect-flash");
 const passport = require("passport");
 const LocalStrategy = require("passport-local");
-const User = require("./models/user.js");
-const MongoStore = require("connect-mongo");
+const MongoStore = require("connect-mongo").default;
 
 
 const listingRouter = require("./routes/listing.js");
 const reviewRouter = require("./routes/review.js");
 const userRouter = require("./routes/user.js");
 
+const Listing = require("./models/listing.js");
+const Review = require("./models/review.js");
+const User = require("./models/user.js");
+
 const dbUrl = process.env.ATLASDB_URL;
+const { data: sampleListings } = require("./init/data.js");
 
 main()
     .then(() => {
-        console.log("Connected succesfully to DB");
+        console.log("Connected succesfully to MongoDB Atlas");
     })
     .catch((err) => {
         console.log(err);
@@ -33,7 +41,62 @@ main()
 
 async function main() {
     await mongoose.connect(dbUrl);
+    console.log("Database name:", mongoose.connection.name);
 }
+
+
+const initDB = async () => {
+  try {
+    await Listing.insertMany(sampleListings);
+    console.log("Sample listings successfully added to MongoDB Atlas!");
+  } catch (err) {
+    console.error("Error inserting sample listings:", err);
+  }
+};
+
+const fixMissingOwners = async () => {
+    try {
+        // Find an existing registered user
+        const user = await User.findOne({});
+
+        if (!user) {
+            console.log("No users found in Atlas. Please register a user first.");
+            return;
+        }
+
+        // Assign that user only to listings with no owner
+        const result = await Listing.updateMany(
+            {
+                $or: [
+                    { owner: { $exists: false } },
+                    { owner: null }
+                ]
+            },
+            {
+                $set: { owner: user._id }
+            }
+        );
+
+        console.log("Listings matched:", result.matchedCount);
+        console.log("Listings updated:", result.modifiedCount);
+    } catch (err) {
+        console.error("Owner repair failed:", err);
+    }
+};
+
+// fixMissingOwners();
+
+
+// initDB();
+
+// const initDB = async () => {
+//     await Listing.deleteMany({});
+//     await Listing.insertMany(data);
+
+//     console.log("Data was initialized");
+// };
+
+// initDB();
 
 app.set("view engine", "ejs");
 app.set("views",path.join(__dirname , "views"));
@@ -59,7 +122,7 @@ const sessionOptions = {
     store,
     secret: process.env.SECRET,
     resave: false,
-    saveuninitialized: true,
+    saveUninitialized: true,
     cookie: {
         expires: Date.now() + 7 * 24 * 60 * 60 * 1000,
         maxAge: 7 * 24 * 60 * 60 * 1000,
@@ -137,6 +200,10 @@ app.use("/listings/:id/reviews" , reviewRouter);
 
 // Users
 app.use("/", userRouter);
+
+app.get("/", (req, res) => {
+    res.render("listings/home.ejs");
+});
 
 // ExpressError
 app.all("*", (req,res,next) => {
